@@ -1,6 +1,10 @@
 import std/sequtils
 import std/strformat
 import std/strutils
+import std/tables
+import std/asyncdispatch
+import sugar
+import ./print
 
 type
   ExprType* = enum
@@ -96,4 +100,110 @@ func parse(toks: var seq[Token]): Expr =
 func parseSource*(source: string): Expr =
   var toks = source.lex
   return toks.parse
+
+type
+  ValueKind* = enum
+    vkList, vkString, vkIdent, vkNil, vkFunc
+
+  LispFunc* = proc (args: seq[Value]): Future[Value]
+  
+  Value* = ref object
+    case kind*: ValueKind
+    of vkList:
+      lValues*: seq[Value]
+    of vkString:
+      sValue*: string
+    of vkIdent:
+      iValue*: string
+    of vkFunc:
+      fn*: LispFunc
+    of vkNil:
+      discard
+
+  Environment* = ref object
+    parent*: Environment
+    values*: Table[string, Value]
+
+proc toString*(self: Value): string =
+  case self.kind:
+  of vkList:
+    let items = self.lvalues.map(i => i.toString).join " "
+    fmt"({items})"
+  of vkString:
+    # Using the double quote method causes nim to treat it as a multiline string
+    # which removes the quote characters entirely, so do it the old fashioned way :^)
+    '"' & self.sValue & '"'
+  of vkIdent:
+    self.iValue
+  of vkFunc:
+    "<func>"
+  of vkNil:
+    "nil"
+  
+proc get(self: Environment, key: string): Value =
+  if self.values.hasKey(key):
+    return self.values[key]
+
+  if self.parent != nil:
+     return self.parent.get(key)
+     
+  return nil
+  
+proc interpretTree*(env: Environment, base: Expr): Future[Value] {.async.} =
+  case base.kind:
+  of exName:
+    return Value(kind: vkIdent, iValue: base.nValue)
+  of exStr:
+    return Value(kind: vkString, sValue: base.sValue)
+  of exList:
+    let vals = base.lValues
+    if vals.len == 0:
+      return Value(kind: vkList, lValues: @[])
+
+    let funcIdent = vals[0]
+    case funcIdent.kind:
+    of exName:
+      let fn = env.get(funcIdent.nValue)
+      if fn == nil:
+        print "unknown func", funcIdent
+        return Value(kind: vkNil)
+
+      case fn.kind:
+      of vkFunc:
+        var callArgs = newSeq[Value]()
+        for val in vals[1..^1]:
+          callArgs.add(await interpretTree(env, val))
+        return await fn.fn(callArgs)
+      else:
+        print "expected vkFunc got", fn
+        return Value(kind: vkNil)
+    else:
+      print "cannot use as type for fn name", funcIdent
+      return Value(kind: vkNil)
+
+proc globalList(): Value =
+  proc impl_list(args: seq[Value]): Future[Value] {.async.} =
+    Value(kind: vkList, lValues: args)
+
+  return Value(kind: vkFunc, fn: impl_list)
+
+proc lIdent*(self: string): Value =
+  Value(kind: vkIdent, iValue: self)
+
+proc lString*(self: string): Value =
+  Value(kind: vkString, sValue: self)
+
+proc lList*(self: seq[Value]): Value =
+  Value(kind: vkList, lValues: self)
+
+let L* = "l".lIdent
+let L_nil* = Value(kind: vkNil)
+
+proc stdenv*(): Environment =
+  let values = {
+    "list": globalList(),
+    "l": globalList()
+  }.toTable
+
+  Environment(values: values)
 

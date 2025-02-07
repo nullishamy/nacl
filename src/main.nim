@@ -1,8 +1,9 @@
 import ./agent
 import ./server
+import ./lang
+import ./util
 import argparse
 import std/net
-import ./rpc
 import std/strutils
 import std/strformat
 
@@ -16,32 +17,30 @@ var p = newParser:
   command("client"):
     run:
       runAgent()
+  command("exec"):
+    arg("value")
+    run:
+      let socket = newSocket()
+      echo "Connected to server"
+      socket.connect("localhost", Port(6969))
+      socket.send(opts.value.lenPrefixed)
+    
+      let returnLen = socket.recv(4)
+      let returned = socket.recv(parseInt(returnLen))
+      echo &"Recv {returned}"
   command("status"):
     run:
-        let socket = newSocket()
-        echo "Connected to server"
-        socket.connect("localhost", Port(6969))
-        let msg = Message(kind: rqStatus, id: 1).serialise
-        
-        echo &"Send: {msg}"
-        socket.send(msg)
+      let socket = newSocket()
+      echo "Connected to server"
+      socket.connect("localhost", Port(6969))
+      let msg = @["status".lIdent].lList.toString.lenPrefixed
+  
+      echo &"Send: {msg}"
+      socket.send(msg)
     
-        let returnLen = socket.recv(4)
-        let returned = socket.recv(parseInt(returnLen))
-        echo &"Recv {returned}"
-  command("exec"):
-    run:
-        let socket = newSocket()
-        echo "Connected to server"
-        socket.connect("localhost", Port(6969))
-        let msg = Message(kind: rqExec, id: 1).serialise
-        
-        echo &"Send: {msg}"
-        socket.send(msg)
-    
-        let returnLen = socket.recv(4)
-        let returned = socket.recv(parseInt(returnLen))
-        echo &"Recv {returned}"
+      let returnLen = socket.recv(4)
+      let returned = socket.recv(parseInt(returnLen))
+      echo &"Recv {returned}"
   
 try:
   p.run(commandLineParams())

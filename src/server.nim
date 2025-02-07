@@ -1,14 +1,11 @@
 import std/net
-import std/os
-import std/osproc
 import std/strformat
 import std/strutils
 import argparse
 import ./print
 import ./lang
-import ./rpc
+import ./util
 import std/tables
-import sugar
 import std/asyncdispatch
 import std/asyncnet
 import system
@@ -17,9 +14,8 @@ import system/exceptions
 type
   Server = ref object
     sock: AsyncSocket
+    env: Environment
     acceptFut: Future[ClientHandle]
-    
-    runtime: Runtime
     clients: seq[ClientHandle]
     running: bool
     clientId: int
@@ -29,11 +25,6 @@ type
     sock: AsyncSocket
     clientAddr: string
     fut: Future[void]
-
-  Func = proc (server: Server): Future[string]
-               
-  Runtime = object
-    funcs: Table[string, Func]
 
 proc recvMessage(client: ClientHandle): Future[string] {.async.} =
   let sizeRaw = await client.sock.recv(4)
@@ -47,50 +38,73 @@ proc recvMessage(client: ClientHandle): Future[string] {.async.} =
 proc `==`(self: ClientHandle, other: ClientHandle): bool =
   self.id == other.id
   
-proc impl_cmdClose(server: Server): Future[string] {.async.} =
-  server.running = false
-  # Force the server to stop trying to listen to new connections
-  server.acceptFut.fail(new IOError)
-  "(ack)"
+proc cmdClose(server: Server): Value =
+  proc impl_cmdClose(args: seq[Value]): Future[Value] {.async.} =
+    server.running = false
+    # Force the server to stop trying to listen to new connections
+    server.acceptFut.fail(new IOError)
+    Value(kind: vkNil)
+    
+  Value(kind: vkFunc, fn: impl_cmdClose)
 
-proc impl_cmdHello(server: Server): Future[string] {.async.} =
-  # Nothing more to it at the moment, just acknowledge we got the connection
-  # and are ready to communicate
-  "(ack)"
+proc cmdHello(server: Server): Value =
+  proc impl_cmdHello(args: seq[Value]): Future[Value] {.async.} =
+    # Nothing more to it at the moment, just acknowledge we got the connection
+    # and are ready to communicate
+    let name = args[0]
+    print name
+    @[L, @[L, "state".lString, "ok".lString].lList, @[L, "msg".lString, "ack".lString].lList].lList
 
-proc impl_cmdStatus(server: Server): Future[string] {.async.} =
-  fmt"(list (""clients"" {server.clients.len}))"
+  Value(kind: vkFunc, fn: impl_cmdHello)
+  
+proc cmdStatus(server: Server): Value =
+  proc impl_cmdStatus(args: seq[Value]): Future[Value] {.async.} =
+    Value(kind: vkList, lValues: @[Value(kind: vkString, sValue: server.clients.len.intToStr)])
 
-proc impl_cmdExec(server: Server): Future[string] {.async.} =
-  for client in server.clients:
-    let msg = Message(kind: rqExec, id: 1, params: @["echo", "test"]).serialise
-    await client.sock.send(msg)
-    let response = client.recvMessage
-    print response
-  "(ack)"
+  Value(kind: vkFunc, fn: impl_cmdStatus)
 
-# Nim doesn't want to infer it when we use it in the map
-let cmdClose: Func = impl_cmdClose
-let cmdHello: Func = impl_cmdHello
-let cmdStatus: Func = impl_cmdStatus
-let cmdExec: Func = impl_cmdExec
+proc cmdExec(server: Server): Value =
+  proc impl_cmdExec(args: seq[Value]): Future[Value] {.async.} =
+    let name = args[0]
+    case name.kind:
+    of vkString:
+      let cmd = name.sValue
+      let cmdArgs = args[1]
+      var builtArgs = @[L]
+      case cmdArgs.kind:
+      of vkList:
+        for a in cmdArgs.lValues:
+            builtArgs.add(a)
+      else:
+        print "invalid args", args
+        return Value(kind: vkNil)
+
+      let msg = @["exec".lIdent, cmd.lString, builtArgs.lList].lList.toString.lenPrefixed
+      for client in server.clients:
+        await client.sock.send(msg)
+    else:
+      print "invalid name", name
+
+    L_nil
+  Value(kind: vkFunc, fn: impl_cmdExec)
+  
+proc initEnv(server: var Server) =
+  let values = {
+    "close": cmdClose(server),
+    "hello": cmdHello(server),
+    "status": cmdStatus(server),
+    "exec": cmdExec(server)
+  }.toTable
+
+  server.env = Environment(parent: stdenv(), values: values)
 
 proc newServer(port: Port): Server =
-  let funcs = {
-    "close": cmdClose,
-    "hello": cmdHello,
-    "status": cmdStatus,
-    "exec": cmdExec
-  }.toTable
-  
-  let runtime = Runtime(funcs: funcs)
-  
   let server = newAsyncSocket()
   server.setSockOpt(OptReuseAddr, true)
   server.bindAddr(port)
   server.listen()
   
-  Server(sock: server, runtime: runtime, running: true, clientId: 0)
+  Server(sock: server, env: Environment(), running: true, clientId: 0)
 
 proc waitForClient(server: Server): Future[ClientHandle] {.async.} = 
   let client = await server.sock.acceptAddr()
@@ -104,30 +118,12 @@ proc handleClient(server: Server, client: ClientHandle) {.async.} =
     if msg == "":
       server.clients.delete(server.clients.find(client))
       return
-      
+
+    print "client said", msg
     let command = parseSource msg
     echo &"Parsed: {command.dbg}"
-
-    case command.kind:
-    of exList:
-      let cmdName = command.lValues[0]
-      case cmdName.kind 
-      of exName:
-        let text = cmdName.nValue
-        var res = ""
-        
-        if server.runtime.funcs.hasKey(text):
-          let fn = server.runtime.funcs[text]
-          res = await fn(server)
-        else:
-          print text, "does not exist"
-          res = fmt"(failure ""commmand {text} not recognised"")"
-
-        await client.sock.send(align(intToStr(res.len), 4, '0') & res)
-      else:
-        print "Expected Name got ", cmdName
-    else:
-      print "Expected List got ", command
+    let res = interpretTree(server.env, command).await.toString
+    await client.sock.send(align(intToStr(res.len), 4, '0') & res)
 
 proc mainLoop(server: Server) {.async.} =
   while server.running:
@@ -154,6 +150,7 @@ var server: Server
 
 proc runServer* =
   server = newServer(Port(6969))
+  server.initEnv
   echo "Server up on localhost:6969"
   
   try:
