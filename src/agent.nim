@@ -15,15 +15,15 @@ proc execCmd(): Value =
     let name = args[0]
     case name.kind:
     of vkString:
-      let cmd = name.sValue
+      let cmd = name.str.str
       let cmdArgs = args[1]
       var builtArgs = newSeq[string]()
       case cmdArgs.kind:
       of vkList:
-        for arg in cmdArgs.lValues:
+        for arg in cmdArgs.list.values:
           case arg.kind:
           of vkString:
-            builtArgs.add(arg.sValue)
+            builtArgs.add(arg.str.str)
           else:
             print "invalid arg", arg
             return Value(kind: vkNil)
@@ -39,7 +39,7 @@ proc execCmd(): Value =
       print "invalid name", name
       
     return "exec finished".lString
-  Value(kind: vkFunc, fn: impl_execCmd)
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_execCmd))
   
 proc mainLoop {.async.} =
   let socket = newSocket()

@@ -45,7 +45,7 @@ proc cmdClose(server: Server): Value =
     server.acceptFut.fail(new IOError)
     Value(kind: vkNil)
     
-  Value(kind: vkFunc, fn: impl_cmdClose)
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_cmdClose))
 
 proc cmdHello(server: Server): Value =
   proc impl_cmdHello(args: seq[Value]): Future[Value] {.async.} =
@@ -55,38 +55,38 @@ proc cmdHello(server: Server): Value =
     print name
     @[L, @[L, "state".lString, "ok".lString].lList, @[L, "msg".lString, "ack".lString].lList].lList
 
-  Value(kind: vkFunc, fn: impl_cmdHello)
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_cmdHello))
   
 proc cmdStatus(server: Server): Value =
   proc impl_cmdStatus(args: seq[Value]): Future[Value] {.async.} =
-    Value(kind: vkList, lValues: @[Value(kind: vkString, sValue: server.clients.len.intToStr)])
+    @[server.clients.len.intToStr.lString].lList
 
-  Value(kind: vkFunc, fn: impl_cmdStatus)
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_cmdStatus))
 
 proc cmdExec(server: Server): Value =
   proc impl_cmdExec(args: seq[Value]): Future[Value] {.async.} =
-    let name = args[0]
-    case name.kind:
-    of vkString:
-      let cmd = name.sValue
-      let cmdArgs = args[1]
-      var builtArgs = @[L]
-      case cmdArgs.kind:
-      of vkList:
-        for a in cmdArgs.lValues:
-            builtArgs.add(a)
-      else:
-        print "invalid args", args
-        return Value(kind: vkNil)
+    let name = args[0].asString
+    if name == nil:
+      print "expected string got", name
+      return L_nil
 
-      let msg = @["exec".lIdent, cmd.lString, builtArgs.lList].lList.toString.lenPrefixed
-      for client in server.clients:
-        await client.sock.send(msg)
-    else:
-      print "invalid name", name
+    let cmdArgs = args[1].asList
+    if cmdArgs == nil:
+      print "expected list got", cmdArgs
+      return L_nil
+      
+    let cmd = name.str
+    var builtArgs = @[L]
+
+    for a in cmdArgs.values:
+        builtArgs.add(a)
+
+    let msg = @["exec".lIdent, cmd.lString, builtArgs.lList].lList.toString.lenPrefixed
+    for client in server.clients:
+      await client.sock.send(msg)
 
     L_nil
-  Value(kind: vkFunc, fn: impl_cmdExec)
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_cmdExec))
   
 proc initEnv(server: var Server) =
   let values = {
