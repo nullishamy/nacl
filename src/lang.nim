@@ -1,19 +1,23 @@
 import std/sequtils
 import std/strformat
 import std/strutils
-import std/tables
 import std/asyncdispatch
-import sugar
+import std/typeinfo
+import std/tables
 import ./print
+import ./stdlib
 
 type
   ExprType* = enum
-    exIdent, exStr, exList, exNumeric
+    exSymbol, exStr, exList, exNumeric, exSourceFile
   
   Expr* = ref object
     case kind*: ExprType
-    of exIdent:
-      ident*: string
+    of exSourceFile:
+      lists: seq[Expr]
+    of exSymbol:
+      symbol*: string
+      quoted*: bool
     of exStr:
       sValue*: string
     of exNumeric:
@@ -22,23 +26,44 @@ type
       lValues*: seq[Expr]
 
   TokenType = enum
-    tkListStart, tkIdent, tkStr, tkListEnd, tkNumeric
+    tkListStart, tkSymbol, tkStr, tkListEnd, tkNumeric
 
   Token = object
+    quoted*: bool
     case kind*: TokenType
     of tkListStart, tkListEnd:
       discard
-    of tkIdent:
-      ident: string
+    of tkSymbol:
+      symbol: string
     of tkStr:
       str: string
     of tkNumeric:
       num: int
-    
-method dbg*(self: Expr): string =
+
+proc toString*(self: Expr): string =
   case self.kind:
-  of exIdent:
-    fmt "Ident({self.ident})"
+  of exSymbol:
+    var quote = ""
+    if self.quoted:
+      quote = "'"
+    fmt "{quote}{self.symbol}"
+  of exStr:
+    fmt "\"{self.sValue}\""
+  of exNumeric:
+    fmt "{self.num}"
+  of exList:
+    let s = self.lValues.map(proc(x: Expr): string = $x.toString).join(" ")
+    fmt "({s})"
+  of exSourceFile:
+    self.lists.map(proc(x: Expr): string = $x.toString).join("\n")
+    
+proc dbg*(self: Expr): string  =
+  case self.kind:
+  of exSymbol:
+    var quote = ""
+    if self.quoted:
+      quote = "'"
+    fmt "Symbol({quote}{self.symbol})"
   of exStr:
     fmt "Str({self.sValue})"
   of exNumeric:
@@ -46,18 +71,24 @@ method dbg*(self: Expr): string =
   of exList:
     let s = self.lValues.map(proc(x: Expr): string = $x.dbg).join(", ")
     fmt "List({s})"
+  of exSourceFile:
+    self.lists.map(proc(x: Expr): string = $x.dbg).join("\n")
 
 func lex(source: string): seq[Token] =
   var toks = newSeq[Token]()
   var i = 0
+  var quoted = false
   
   while i < source.len:
     var ch = source[i]
     
     if ch == '(':
-      toks.add(Token(kind: tkListStart))
+      toks.add(Token(kind: tkListStart, quoted: quoted))
+      quoted = false
     elif ch == ')':
       toks.add(Token(kind: tkListEnd))
+    elif ch == '\'':
+      quoted = true
     elif ch.isDigit:
       # Starts with number = numeric, taking priority over idents below
       var numeric = ""
@@ -69,18 +100,20 @@ func lex(source: string): seq[Token] =
 
       # Since we'll have gone 1 over in our loop
       i.dec
-      toks.add(Token(kind: tkNumeric, num: parseInt(numeric)))
+      toks.add(Token(kind: tkNumeric, num: parseInt(numeric), quoted: quoted))
+      quoted = false
     elif ch.isAlphaNumeric:
-      var ident = ""
+      var symbol = ""
 
       while i < source.len and ch.isAlphaNumeric:
-        ident.add(ch)
+        symbol.add(ch)
         i.inc
         ch = source[i]
 
       # Since we'll have gone 1 over in our loop
       i.dec
-      toks.add(Token(kind: tkIdent, ident: ident))
+      toks.add(Token(kind: tkSymbol, symbol: symbol, quoted: quoted))
+      quoted = false
     elif ch == '"':
       var lit = ""
 
@@ -89,12 +122,19 @@ func lex(source: string): seq[Token] =
       ch = source[i]
       
       while i < source.len and ch != '"':
+        if ch == '`':
+          i.inc
+          i.inc
+          ch = source[i]
+          lit.add('"'&"")
+          continue
+          
         lit.add(ch)
         i.inc
         ch = source[i]
 
-      toks.add(Token(kind: tkStr, str: lit))
-
+      toks.add(Token(kind: tkStr, str: lit, quoted: quoted))
+      quoted = false
     i.inc
 
   toks
@@ -103,158 +143,121 @@ func pop(toks: var seq[Token]): Token =
   let val = toks[0]
   toks.delete(0)
   return val
-  
-func parse(toks: var seq[Token]): Expr =
+
+type MacroExpander = proc (expr: Expr): Expr
+proc parse(toks: var seq[Token], macros: Table[string, MacroExpander]): Expr =
   var current = toks.pop()
   if current.kind == tkListStart:
     var children = newSeq[Expr]()
-    var next = toks.parse
+    if current.quoted:
+      children.add(Expr(kind: exSymbol, symbol: "list"))
+      
+    var next = toks.parse(macros)
     while next != nil:
       children.add(next)
-      next = toks.parse
-    return Expr(kind: exList, lValues: children)
-  elif current.kind == tkIdent:
-    return Expr(kind: exIdent, ident: current.ident)
+      next = toks.parse(macros)
+
+    let happy = Expr(kind: exList, lValues: children)
+    
+    let first = children[0]
+    case first.kind:
+    of exSymbol:
+      let sym = first.symbol
+      if not macros.hasKey(sym):
+        return happy
+
+      let expander = macros[sym]
+      return expander(happy)
+    else:
+      return happy
+  elif current.kind == tkSymbol:
+    return Expr(kind: exSymbol, symbol: current.symbol, quoted: current.quoted)
   elif current.kind == tkStr:
     return Expr(kind: exStr, sValue: current.str)
   elif current.kind == tkNumeric:
     return Expr(kind: exNumeric, num: current.num)
+  elif current.kind == tkListEnd:
+    return nil
   else:
     print "unrecognised tok", current
-    
+
   return nil
+
+# (apt
+# 'install
+# ("git" "curl" "net-tools")) ;; For now, it will take this verbatim, no interpretation
+#
+# vvv
+#
+# (exec "apt" (list "install" "git" "curl" "net-tools")
   
-func parseSource*(source: string): Expr =
+proc macroApt(): MacroExpander =
+  proc apt_impl(expr: Expr): Expr =
+    case expr.kind:
+    of exList:
+      let args = expr.lValues
+
+      # install, search, etc (first arg to apt)
+      let methodRaw = args[1]
+      var meth = ""
+      case methodRaw.kind:
+      of exSymbol:
+        meth = methodRaw.symbol
+      else:
+        raise newTypeError("invalid method")
+
+      # list of strings, nothing else
+      let packagesRaw = args[2]
+      var packages = @[
+        Expr(kind: exSymbol, symbol: "list", quoted: false),
+        Expr(kind: exStr, sValue: "install")
+      ]
+
+      case packagesRaw.kind:
+      of exList:
+        print "got response, dbg:", packagesRaw, packagesRaw.lValues
+        for p in packagesRaw.lValues:
+          packages.add(p)
+        
+        return Expr(kind: exList, lValues: @[
+          Expr(kind: exSymbol, symbol: "exec", quoted: false),
+          Expr(kind: exStr, sValue: "apt"),
+          Expr(kind: exList, lValues: packages)
+        ])
+      else:
+        raise newTypeError("invalid packages")
+    else:
+      raise newTypeError("invalid func")
+             
+  apt_impl
+  
+proc parseSource*(source: string): Expr =
+  let macros = {
+    "apt": macroApt() 
+  }.toTable
+  
   var toks = source.lex
-  return toks.parse
+  var lists = newSeq[Expr]()
+  while toks.len > 0:
+    lists.add(toks.parse(macros))
 
-type
-  ValueKind* = enum
-    vkList, vkString, vkIdent, vkNil, vkFunc, vkNumeric
-
-  LispFunc* = proc (args: seq[Value], ctx: void*): Future[Value]
-
-  ListValue* = ref object
-    values*: seq[Value]
-  StringValue* = ref object
-    str*: string
-  IdentValue* = ref object
-    ident*: string
-  NumericValue* = ref object
-    num*: int
-  FuncValue* = ref object
-    fn*: LispFunc
-    
-  Value* = ref object
-    case kind*: ValueKind
-    of vkList:
-      list*: ListValue
-    of vkString:
-      str*: StringValue
-    of vkIdent:
-      ident*: IdentValue
-    of vkNumeric:
-      num*: NumericValue
-    of vkFunc:
-      fn*: FuncValue
-    of vkNil:
-      discard
-
-  Environment* = ref object
-    parent*: Environment
-    values*: Table[string, Value]
-
-proc isNil*(self: Value): bool =
-  if self == nil:
-    return false
-    
-  case self.kind:
-  of vkNil:
-    true
-  else:
-    false
-
-proc asList*(self: Value): ListValue =
-  if self == nil:
-    return nil
-    
-  case self.kind:
-  of vkList:
-    self.list
-  else:
-    nil
-
-proc asString*(self: Value): StringValue =
-  if self == nil:
-    return nil
-    
-  case self.kind:
-  of vkString:
-    self.str
-  else:
-    nil
-
-proc asIdent*(self: Value): IdentValue =
-  if self == nil:
-    return nil
-    
-  case self.kind:
-  of vkIdent:
-    self.ident
-  else:
-    nil
-
-proc asNumeric*(self: Value): NumericValue =
-  if self == nil:
-    return nil
-    
-  case self.kind:
-  of vkNumeric:
-    self.num
-  else:
-    nil
-
-proc asFunc*(self: Value): FuncValue =
-  if self == nil:
-    return nil
-    
-  case self.kind:
-  of vkFunc:
-    self.fn
-  else:
-    nil
-    
-proc toString*(self: Value): string =
-  case self.kind:
-  of vkList:
-    let items = self.list.values.map(i => i.toString).join " "
-    fmt"({items})"
-  of vkString:
-    # Using the double quote method causes nim to treat it as a multiline string
-    # which removes the quote characters entirely, so do it the old fashioned way :^)
-    '"' & self.str.str & '"'
-  of vkIdent:
-    self.ident.ident
-  of vkNumeric:
-    intToStr(self.num.num)
-  of vkFunc:
-    "<func>"
-  of vkNil:
-    "nil"
-
-proc get(self: Environment, key: string): Value =
-  if self.values.hasKey(key):
-    return self.values[key]
-
-  if self.parent != nil:
-     return self.parent.get(key)
-     
-  return nil
+  return Expr(kind: exSourceFile, lists: lists)
   
-proc interpretTree*(env: Environment, base: Expr): Future[Value] {.async.} =
+proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.async.} =
   case base.kind:
-  of exIdent:
-    return Value(kind: vkIdent, ident: IdentValue(ident: base.ident))
+  of exSourceFile:
+    var lastRes = L_nil
+    for list in base.lists:
+      lastRes = await interpretTree(env, list, ctx)
+    return lastRes
+  of exSymbol:
+    if base.quoted:
+      return Value(kind: vkSymbol, symbol: SymbolValue(symbol: base.symbol))
+      
+    let fromEnv = env.get(base.symbol)
+    if fromEnv == nil:
+      raise newReferenceError("unknown symbol {base.symbol}".fmt)
+    return fromEnv
   of exStr:
     return Value(kind: vkString, str: StringValue(str: base.sValue))
   of exNumeric:
@@ -264,57 +267,40 @@ proc interpretTree*(env: Environment, base: Expr): Future[Value] {.async.} =
     if vals.len == 0:
       return Value(kind: vkList, list: ListValue())
 
-    let funcIdent = vals[0]
-    case funcIdent.kind:
-    of exIdent:
-      let fn = env.get(funcIdent.ident)
-      if fn == nil:
-        print "unknown func", funcIdent
-        return Value(kind: vkNil)
+    let funcSymbol = vals[0]
+    case funcSymbol.kind:
+    of exSymbol:
+      case funcSymbol.symbol:
+      of "if":
+        # (if (cond) (when-true) (when-false)?)
+        let cond = vals[1]
+        let whenTrue = vals[2]
+        let whenFalse = vals[3]
 
-      case fn.kind:
-      of vkFunc:
+        let isTrue = await interpretTree(env, cond, ctx)
+        if not isTrue.isNil:
+          return await interpretTree(env, whenTrue, ctx)
+        else:
+          if whenFalse != nil:
+            return await interpretTree(env, whenFalse, ctx)
+          else:
+            return L_nil
+      of "set":
+        # (set name value)
+        let sym = interpretTree(env, vals[1], ctx).await.asSymbol
+        if sym == nil:
+          return L_nil
+
+        let val = await interpretTree(env, vals[2], ctx)
+        env.set(sym.symbol, val)
+      else:
+        let fn = env.get(funcSymbol.symbol).asFunc
+        if fn == nil:
+          raise newReferenceError("unknown function {funcSymbol.symbol}".fmt)
+
         var callArgs = newSeq[Value]()
         for val in vals[1..^1]:
-          callArgs.add(await interpretTree(env, val))
-        return await fn.fn.fn(callArgs)
-      else:
-        print "expected vkFunc got", fn
-        return Value(kind: vkNil)
+          callArgs.add(await interpretTree(env, val, ctx))
+        return await fn.fn(callArgs, ctx)
     else:
-      print "cannot use as type for fn name", funcIdent
-      return Value(kind: vkNil)
-
-proc globalList(): Value =
-  proc impl_list(args: seq[Value]): Future[Value] {.async.} =
-    Value(kind: vkList, list: ListValue(values: args))
-
-  return Value(kind: vkFunc, fn: FuncValue(fn: impl_list))
-
-proc lIdent*(self: string): Value =
-  Value(kind: vkIdent, ident: IdentValue(ident: self))
-
-proc lString*(self: string): Value =
-  Value(kind: vkString, str: StringValue(str: self))
-
-proc lList*(self: seq[Value]): Value =
-  Value(kind: vkList, list: ListValue(values: self))
-
-let L* = "l".lIdent
-let L_nil* = Value(kind: vkNil)
-
-proc stdenv*(): Environment =
-  let values = {
-    "list": globalList(),
-    "l": globalList()
-  }.toTable
-
-  Environment(values: values)
-
-proc test() {.async.} =
-  let input = readFile("./inputs/test.lisp")
-  let parsed = parseSource(input)
-  let env = stdenv()
-  print await interpretTree(env, parsed)
-
-
+      raise newTypeError(fmt"invalid value for function call {funcSymbol.kind} {funcSymbol.dbg}")

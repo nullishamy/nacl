@@ -1,6 +1,7 @@
 import ./agent
 import ./server
 import ./lang
+import ./stdlib
 import ./util
 import argparse
 import std/net
@@ -21,9 +22,12 @@ var p = newParser:
     arg("value")
     run:
       let socket = newSocket()
-      echo "Connected to server"
       socket.connect("localhost", Port(6969))
-      socket.send(opts.value.lenPrefixed)
+      echo "Connected to server"
+      
+      let parsed = parseSource(opts.value)
+      echo "parsed " & parsed.toString
+      socket.send(parsed.toString.lenPrefixed)
     
       let returnLen = socket.recv(4)
       let returned = socket.recv(parseInt(returnLen))
@@ -31,9 +35,9 @@ var p = newParser:
   command("status"):
     run:
       let socket = newSocket()
-      echo "Connected to server"
       socket.connect("localhost", Port(6969))
-      let msg = @["status".lIdent].lList.toString.lenPrefixed
+      echo "Connected to server"
+      let msg = @["status".lSymbol].lList.toString.lenPrefixed
   
       echo &"Send: {msg}"
       socket.send(msg)

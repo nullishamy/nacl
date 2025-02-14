@@ -18,6 +18,8 @@
         devShell = mkShell {
           buildInputs = [
             nim
+            gcc
+            glibc.static
             nimble
           ];
         };
