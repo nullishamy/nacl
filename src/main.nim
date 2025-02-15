@@ -26,7 +26,6 @@ var p = newParser:
       echo "Connected to server"
       
       let parsed = parseSource(opts.value)
-      echo "parsed " & parsed.toString
       socket.send(parsed.toString.lenPrefixed)
     
       let returnLen = socket.recv(4)
@@ -37,7 +36,7 @@ var p = newParser:
       let socket = newSocket()
       socket.connect("localhost", Port(6969))
       echo "Connected to server"
-      let msg = @["status".lSymbol].lList.toString.lenPrefixed
+      let msg = @["status".stubbed].lList.toString.lenPrefixed
   
       echo &"Send: {msg}"
       socket.send(msg)

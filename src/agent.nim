@@ -35,13 +35,21 @@ proc execCmd(): Value =
       builtArgs.add(arg.str.str)
 
     let argstr = builtArgs.join(" ")
-    # var result = execCmdEx(&"{cmd.str} {argstr}")
-    var result = @["ran {cmd.str} {argstr}".fmt]
+    var result = execCmdEx(&"{cmd.str} {argstr}")
+    # var result = @["ran {cmd.str} {argstr}".fmt]
     let escaped = result[0].replace('"'&"", '`'&'"')
     
-    return @["response".lSymbol, tracker, escaped.lString].lList
+    return @["response".stubbed, tracker, escaped.lString].lList
     
-  Value(kind: vkFunc, fn: FuncValue(fn: impl_execCmd))
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_execCmd, name: "exec"))
+
+proc statusCmd(): Value =
+  proc impl_statusCmd(args: seq[Value], ctx: Any): Future[Value] {.async.} =
+    # (status)
+    return "ok".lString
+    
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_statusCmd, name: "status"))
+
 
 proc recvMessage(socket: AsyncSocket, env: Environment): Future[Value] {.async.} =
   let size = await socket.recv(4)
@@ -98,14 +106,15 @@ proc mainLoop {.async.} =
       break
     except OSError:
       logger.warn("Failed to connect to {cfg.host}:{cfg.port}, retry in 5s".fmt)
-      sleep(5_000)
+      await sleepAsync(5_000)
 
   let env = Environment(parent: stdenv(), values: {
-    "exec": execCmd()
+    "exec": execCmd(),
+    "status": statusCmd()
   }.toTable)
 
   logger.info("Saying hello to server...")
-  await socket.sendMessage(@["hello".lSymbol, @[L, "agent".lString, 0.lNumeric].lList].lList)
+  await socket.sendMessage(@["hello".stubbed, @[L, "agent".lString, 0.lNumeric].lList].lList)
   let helloRes = await socket.recvMessage(env)
   logger.info("Server said {helloRes.toString} to our hello".fmt)
 

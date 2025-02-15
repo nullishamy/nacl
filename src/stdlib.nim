@@ -22,6 +22,7 @@ type
     num*: int
   FuncValue* = ref object
     fn*: LispFunc
+    name*: string
     
   Value* = ref object
     case kind*: ValueKind
@@ -139,7 +140,7 @@ proc toString*(self: Value): string =
   of vkNumeric:
     intToStr(self.num.num)
   of vkFunc:
-    "<func>"
+    self.fn.name
   of vkNil:
     "nil"
 
@@ -170,20 +171,34 @@ proc lList*(self: seq[Value]): Value =
 proc lListLit*(self: seq[Value]): Value =
   Value(kind: vkList, list: ListValue(values: self))
 
-let L* = "l".lSymbol
-let L_nil* = Value(kind: vkNil)
-
 proc globalList(): Value =
   proc impl_list(args: seq[Value], ctx: Any): Future[Value] {.async.} =
     Value(kind: vkList, list: ListValue(values: args))
 
-  return Value(kind: vkFunc, fn: FuncValue(fn: impl_list))
+  return Value(kind: vkFunc, fn: FuncValue(fn: impl_list, name: "list"))
+
+let L* = globalList()
+let L_nil* = Value(kind: vkNil)
 
 proc globalAck(): Value =
   proc impl_ack(args: seq[Value], ctx: Any): Future[Value] {.async.} =
     Value(kind: vkNil)
 
-  return Value(kind: vkFunc, fn: FuncValue(fn: impl_ack))
+  return Value(kind: vkFunc, fn: FuncValue(fn: impl_ack, name: "ack"))
+
+proc globalMap(): Value =
+  proc impl_map(args: seq[Value], ctx: Any): Future[Value] {.async.} =
+    # (map <list> <mapper>)
+    let lst = args[0].asList
+    let mapper = args[1].asFunc
+
+    var outValues: seq[Value] = @[]
+    for value in lst.values:
+      outValues.add(await mapper.fn(@[value], ctx))
+
+    outValues.lList
+
+  return Value(kind: vkFunc, fn: FuncValue(fn: impl_map, name: "map"))
 
 proc mapFromPairs*(p: seq[Value]): Table[string, Value] =
   for pair in p:
@@ -202,7 +217,14 @@ proc stdenv*(): Environment =
     "list": globalList(),
     "l": globalList(),
     "nil": L_nil,
-    "ack": globalAck()
+    "ack": globalAck(),
+    "map": globalMap()
   }.toTable
 
   Environment(values: values)
+
+proc stub(_: seq[Value], ctx: Any): Future[Value] {.async.} =
+  L_nil
+  
+proc stubbed*(name: string): Value =
+  Value(kind: vkFunc, fn: FuncValue(fn: stub, name: name))

@@ -6,6 +6,7 @@ import std/typeinfo
 import std/tables
 import ./print
 import ./stdlib
+import std/sugar
 
 type
   ExprType* = enum
@@ -105,7 +106,7 @@ func lex(source: string): seq[Token] =
     elif ch.isAlphaNumeric:
       var symbol = ""
 
-      while i < source.len and ch.isAlphaNumeric:
+      while i < source.len and (ch.isAlphaNumeric or ch == '-'):
         symbol.add(ch)
         i.inc
         ch = source[i]
@@ -135,6 +136,11 @@ func lex(source: string): seq[Token] =
 
       toks.add(Token(kind: tkStr, str: lit, quoted: quoted))
       quoted = false
+    elif ch == ';':
+      # Comments
+      while i < source.len and ch != '\n':
+        i.inc
+        ch = source[i]
     i.inc
 
   toks
@@ -158,6 +164,8 @@ proc parse(toks: var seq[Token], macros: Table[string, MacroExpander]): Expr =
       next = toks.parse(macros)
 
     let happy = Expr(kind: exList, lValues: children)
+    if children.len == 0:
+      return happy
     
     let first = children[0]
     case first.kind:
@@ -210,12 +218,11 @@ proc macroApt(): MacroExpander =
       let packagesRaw = args[2]
       var packages = @[
         Expr(kind: exSymbol, symbol: "list", quoted: false),
-        Expr(kind: exStr, sValue: "install")
+        Expr(kind: exStr, sValue: meth)
       ]
 
       case packagesRaw.kind:
       of exList:
-        print "got response, dbg:", packagesRaw, packagesRaw.lValues
         for p in packagesRaw.lValues:
           packages.add(p)
         
@@ -230,10 +237,54 @@ proc macroApt(): MacroExpander =
       raise newTypeError("invalid func")
              
   apt_impl
+
+# (plan "name" (
+#  (exec "apt" '("update"))
+#  (apt 'install ("git" "curl"))))
+proc macroPlan(): MacroExpander =
+  proc plan_impl(expr: Expr): Expr =
+    case expr.kind:
+    of exList:
+      let args = expr.lValues
+
+      let planName = args[1]
+      var name = ""
+      case planName.kind:
+      of exStr:
+        name = planName.sValue
+      else:
+        raise newTypeError("invalid plan name")
+
+      # list of lists
+      # (list (waitfor <step>) (waitfor <step>))
+      let stepsRaw = args[2]
+      var steps = @[
+        Expr(kind: exSymbol, symbol: "list", quoted: false),
+        Expr(kind: exStr, sValue: "plan '{name}' finished".fmt)
+      ]
+
+      case stepsRaw.kind:
+      of exList:
+        for step in stepsRaw.lValues:
+          steps.add(
+            Expr(kind: exList, lValues: @[
+              Expr(kind: exSymbol, symbol: "waitfor", quoted: false),
+              step
+            ])
+          )
+        
+        return Expr(kind: exList, lValues: steps)
+      else:
+        raise newTypeError("invalid packages")
+    else:
+      raise newTypeError("invalid func")
+             
+  plan_impl
   
 proc parseSource*(source: string): Expr =
   let macros = {
-    "apt": macroApt() 
+    "apt": macroApt(),
+    "plan": macroPlan()
   }.toTable
   
   var toks = source.lex
@@ -242,8 +293,64 @@ proc parseSource*(source: string): Expr =
     lists.add(toks.parse(macros))
 
   return Expr(kind: exSourceFile, lists: lists)
+
+proc asList*(self: Expr): seq[Expr] =
+  if self == nil:
+    return @[]
+    
+  case self.kind:
+  of exList:
+    self.lValues
+  else:
+    return @[]
+
+proc asString*(self: Expr): string =
+  if self == nil:
+    return ""
+    
+  case self.kind:
+  of exStr:
+    self.sValue
+  else:
+    ""
+
+proc asSymbol*(self: Expr): string =
+  if self == nil:
+    return ""
+    
+  case self.kind:
+  of exSymbol:
+    self.symbol
+  else:
+    ""
+
+proc asNumeric*(self: Expr): int =
+  if self == nil:
+    return 0
+    
+  case self.kind:
+  of exNumeric:
+    self.num
+  else:
+    0
   
 proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.async.} =
+  proc defunWrapper(env: Environment, name: string, idents: seq[string], body: Expr): Value =
+    proc inner(args: seq[Value], ctx: Any): Future[Value] {.async.} =
+      if args.len != idents.len:
+        raise newTypeError("expected {idents.len} args got {args.len}".fmt)
+
+      var argMap = initTable[string, Value]()
+      var i = 0
+      for ident in idents:
+        argMap[ident] = args[i]
+        i.inc
+        
+      let innerEnv = Environment(parent: env, values: argMap)
+      await interpretTree(innerEnv, body, ctx)
+        
+    Value(kind: vkFunc, fn: FuncValue(fn: inner, name: name))
+
   case base.kind:
   of exSourceFile:
     var lastRes = L_nil
@@ -271,17 +378,27 @@ proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.asy
     case funcSymbol.kind:
     of exSymbol:
       case funcSymbol.symbol:
+      of "defun":
+        # (defun name (args) (body))
+        let name = vals[1].asSymbol
+        let args = vals[2].asList.map(x => x.asSymbol)
+        let body = vals[3]
+
+        env.set(name, defunWrapper(env, name, args, body))
       of "if":
         # (if (cond) (when-true) (when-false)?)
         let cond = vals[1]
         let whenTrue = vals[2]
-        let whenFalse = vals[3]
 
         let isTrue = await interpretTree(env, cond, ctx)
         if not isTrue.isNil:
           return await interpretTree(env, whenTrue, ctx)
         else:
-          if whenFalse != nil:
+          if vals.len <= 3:
+            return L_nil
+            
+          let whenFalse = vals[3]
+          if not whenFalse.isNil:
             return await interpretTree(env, whenFalse, ctx)
           else:
             return L_nil

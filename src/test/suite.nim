@@ -32,6 +32,16 @@ proc variablesTest() =
   testFrom("variables.cl")
     .evaluatesTo("(12)")
     .run
+
+proc fnStringifyTest() =
+  testFrom("fn-strings.cl")
+    .evaluatesTo("(list (\"arg1\" 2))")
+    .run
+
+proc defunTest() =
+  testFrom("defun.cl")
+    .evaluatesTo("(('exec 'apt 'install (\"git\")) ('exec 'apt 'install (\"curl\")))")
+    .run
   
 let tests = @[
   aptTest,
@@ -39,7 +49,9 @@ let tests = @[
   constructListTest,
   quoteListTest,
   symbolsTest,
-  variablesTest
+  variablesTest,
+  fnStringifyTest,
+  defunTest
 ]
 
 for test in tests:

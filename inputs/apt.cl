@@ -1,5 +1,4 @@
-(apt
- 'install
- ("git" "curl" "net-tools"))
+(set 'update (waitfor (apt 'update (""))))
+(set 'install (waitfor (apt 'install ("git" "curl" "net-tools" "-y"))))
 
-(exec "echo" '("hello" "world"))
+'("finished plan" update install)
