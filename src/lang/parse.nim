@@ -151,19 +151,78 @@ func pop(toks: var seq[Token]): Token =
   toks.delete(0)
   return val
 
-proc parse(toks: var seq[Token]): Expr =
+type MacroExpander = proc (expr: Expr): Expr
+                       
+# (plan "name" (
+#  (exec "apt" '("update"))
+#  (apt 'install ("git" "curl"))))
+proc macroPlan(): MacroExpander =
+  proc plan_impl(expr: Expr): Expr =
+    case expr.kind:
+    of exList:
+      let args = expr.lValues
+
+      let planName = args[1]
+      var name = ""
+      case planName.kind:
+      of exStr:
+        name = planName.sValue
+      else:
+        raise newTypeError("invalid plan name")
+
+      # list of lists
+      # (list (waitfor <step>) (waitfor <step>))
+      let stepsRaw = args[2]
+      var steps = @[
+        Expr(kind: exSymbol, symbol: "list", quoted: false),
+        Expr(kind: exStr, sValue: "plan '{name}' finished".fmt)
+      ]
+
+      case stepsRaw.kind:
+      of exList:
+        for step in stepsRaw.lValues:
+          steps.add(
+            Expr(kind: exList, lValues: @[
+              Expr(kind: exSymbol, symbol: "waitfor", quoted: false),
+              step
+            ])
+          )
+        
+        return Expr(kind: exList, lValues: steps)
+      else:
+        raise newTypeError("invalid packages")
+    else:
+      raise newTypeError("invalid func")
+             
+  plan_impl
+  
+proc parse(toks: var seq[Token], macros: Table[string, MacroExpander]): Expr =
   var current = toks.pop()
   if current.kind == tkListStart:
     var children = newSeq[Expr]()
     if current.quoted:
       children.add(Expr(kind: exSymbol, symbol: "list"))
       
-    var next = toks.parse
+    var next = toks.parse(macros)
     while next != nil:
       children.add(next)
-      next = toks.parse
+      next = toks.parse(macros)
 
-    return Expr(kind: exList, lValues: children)
+    let happy = Expr(kind: exList, lValues: children)
+    if children.len == 0:
+      return happy
+    
+    let first = children[0]
+    case first.kind:
+    of exSymbol:
+      let sym = first.symbol
+      if not macros.hasKey(sym):
+        return happy
+
+      let expander = macros[sym]
+      return expander(happy)
+    else:
+      return happy
   elif current.kind == tkSymbol:
     return Expr(kind: exSymbol, symbol: current.symbol, quoted: current.quoted)
   elif current.kind == tkStr:
@@ -178,10 +237,14 @@ proc parse(toks: var seq[Token]): Expr =
   return nil
 
 proc parseSource*(source: string): Expr =
+  let macros = {
+    "plan": macroPlan()
+  }.toTable
+    
   var toks = source.lex
   var lists = newSeq[Expr]()
   while toks.len > 0:
-    lists.add(toks.parse)
+    lists.add(toks.parse(macros))
 
   return Expr(kind: exSourceFile, lists: lists)
 
