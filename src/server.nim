@@ -3,9 +3,10 @@ import std/strformat
 import std/strutils
 import argparse
 import ./log
-import ./stdlib
 import ./print
-import ./lang
+import ./lang/std
+import ./lang/runtime
+import ./lang/parse
 import ./util
 import std/tables
 import std/asyncdispatch
@@ -119,7 +120,10 @@ proc cmdHello(): Value =
     clientHandle.ty = clientType
     logger.info("Client {clientId} self identifies as {clientType}".fmt)
 
-    @[L, @[L, "state".lString, "ok".lString].lList, @[L, "msg".lString, "ack".lString].lList].lList
+    @["list".stubbed,
+      @["list".stubbed, "state".lString, "ok".lString].lList,
+      @["list".stubbed, "msg".lString, "ack".lString].lList
+    ].lList
 
   Value(kind: vkFunc, fn: FuncValue(fn: impl_cmdHello, name: "hello"))
   
@@ -140,7 +144,7 @@ proc cmdExec(): Value =
       raise newTypeError("expected list")
     
     let cmd = name.str
-    var builtArgs = @[L]
+    var builtArgs = @["list".stubbed]
 
     for a in cmdArgs.values:
         builtArgs.add(a)

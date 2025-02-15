@@ -4,8 +4,8 @@ import std/strutils
 import std/asyncdispatch
 import std/typeinfo
 import std/tables
-import ./print
-import ./stdlib
+import ../print
+import ./runtime
 import std/sugar
 
 type
@@ -106,7 +106,8 @@ func lex(source: string): seq[Token] =
     elif ch.isAlphaNumeric:
       var symbol = ""
 
-      while i < source.len and (ch.isAlphaNumeric or ch == '-'):
+      # Symbols can be [a-zA-Z0-9/-]
+      while i < source.len and (ch.isAlphaNumeric or ch == '-' or ch == '/'):
         symbol.add(ch)
         i.inc
         ch = source[i]
@@ -150,34 +151,19 @@ func pop(toks: var seq[Token]): Token =
   toks.delete(0)
   return val
 
-type MacroExpander = proc (expr: Expr): Expr
-proc parse(toks: var seq[Token], macros: Table[string, MacroExpander]): Expr =
+proc parse(toks: var seq[Token]): Expr =
   var current = toks.pop()
   if current.kind == tkListStart:
     var children = newSeq[Expr]()
     if current.quoted:
       children.add(Expr(kind: exSymbol, symbol: "list"))
       
-    var next = toks.parse(macros)
+    var next = toks.parse
     while next != nil:
       children.add(next)
-      next = toks.parse(macros)
+      next = toks.parse
 
-    let happy = Expr(kind: exList, lValues: children)
-    if children.len == 0:
-      return happy
-    
-    let first = children[0]
-    case first.kind:
-    of exSymbol:
-      let sym = first.symbol
-      if not macros.hasKey(sym):
-        return happy
-
-      let expander = macros[sym]
-      return expander(happy)
-    else:
-      return happy
+    return Expr(kind: exList, lValues: children)
   elif current.kind == tkSymbol:
     return Expr(kind: exSymbol, symbol: current.symbol, quoted: current.quoted)
   elif current.kind == tkStr:
@@ -191,106 +177,11 @@ proc parse(toks: var seq[Token], macros: Table[string, MacroExpander]): Expr =
 
   return nil
 
-# (apt
-# 'install
-# ("git" "curl" "net-tools")) ;; For now, it will take this verbatim, no interpretation
-#
-# vvv
-#
-# (exec "apt" (list "install" "git" "curl" "net-tools")
-  
-proc macroApt(): MacroExpander =
-  proc apt_impl(expr: Expr): Expr =
-    case expr.kind:
-    of exList:
-      let args = expr.lValues
-
-      # install, search, etc (first arg to apt)
-      let methodRaw = args[1]
-      var meth = ""
-      case methodRaw.kind:
-      of exSymbol:
-        meth = methodRaw.symbol
-      else:
-        raise newTypeError("invalid method")
-
-      # list of strings, nothing else
-      let packagesRaw = args[2]
-      var packages = @[
-        Expr(kind: exSymbol, symbol: "list", quoted: false),
-        Expr(kind: exStr, sValue: meth)
-      ]
-
-      case packagesRaw.kind:
-      of exList:
-        for p in packagesRaw.lValues:
-          packages.add(p)
-        
-        return Expr(kind: exList, lValues: @[
-          Expr(kind: exSymbol, symbol: "exec", quoted: false),
-          Expr(kind: exStr, sValue: "apt"),
-          Expr(kind: exList, lValues: packages)
-        ])
-      else:
-        raise newTypeError("invalid packages")
-    else:
-      raise newTypeError("invalid func")
-             
-  apt_impl
-
-# (plan "name" (
-#  (exec "apt" '("update"))
-#  (apt 'install ("git" "curl"))))
-proc macroPlan(): MacroExpander =
-  proc plan_impl(expr: Expr): Expr =
-    case expr.kind:
-    of exList:
-      let args = expr.lValues
-
-      let planName = args[1]
-      var name = ""
-      case planName.kind:
-      of exStr:
-        name = planName.sValue
-      else:
-        raise newTypeError("invalid plan name")
-
-      # list of lists
-      # (list (waitfor <step>) (waitfor <step>))
-      let stepsRaw = args[2]
-      var steps = @[
-        Expr(kind: exSymbol, symbol: "list", quoted: false),
-        Expr(kind: exStr, sValue: "plan '{name}' finished".fmt)
-      ]
-
-      case stepsRaw.kind:
-      of exList:
-        for step in stepsRaw.lValues:
-          steps.add(
-            Expr(kind: exList, lValues: @[
-              Expr(kind: exSymbol, symbol: "waitfor", quoted: false),
-              step
-            ])
-          )
-        
-        return Expr(kind: exList, lValues: steps)
-      else:
-        raise newTypeError("invalid packages")
-    else:
-      raise newTypeError("invalid func")
-             
-  plan_impl
-  
 proc parseSource*(source: string): Expr =
-  let macros = {
-    "apt": macroApt(),
-    "plan": macroPlan()
-  }.toTable
-  
   var toks = source.lex
   var lists = newSeq[Expr]()
   while toks.len > 0:
-    lists.add(toks.parse(macros))
+    lists.add(toks.parse)
 
   return Expr(kind: exSourceFile, lists: lists)
 

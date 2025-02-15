@@ -1,7 +1,8 @@
 import ./agent
 import ./server
-import ./lang
-import ./stdlib
+import ./lang/std
+import ./lang/parse
+import ./lang/runtime
 import ./util
 import argparse
 import std/net

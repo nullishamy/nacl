@@ -1,5 +1,6 @@
-import ../lang
-import ../stdlib
+import ../lang/std
+import ../lang/parse
+import ../lang/runtime
 import std/strformat
 import std/asyncdispatch
 import std/typeinfo
@@ -17,7 +18,7 @@ proc getSource(self: Test): Expr =
 
 proc testFn(): Value =
   proc impl_test(args: seq[Value], ctx: Any): Future[Value] {.async.} =
-    return @[L, args.lList].lList
+    return @["list".stubbed, args.lList].lList
     
   Value(kind: vkFunc, fn: FuncValue(fn: impl_test, name: "test"))
   

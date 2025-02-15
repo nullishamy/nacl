@@ -10,8 +10,9 @@ import std/tables
 import std/typeinfo
 import ./util
 import ./print
-import ./lang
-import ./stdlib
+import ./lang/std
+import ./lang/parse
+import ./lang/runtime
 import ./log
 
 proc execCmd(): Value =
@@ -114,7 +115,7 @@ proc mainLoop {.async.} =
   }.toTable)
 
   logger.info("Saying hello to server...")
-  await socket.sendMessage(@["hello".stubbed, @[L, "agent".lString, 0.lNumeric].lList].lList)
+  await socket.sendMessage(@["hello".stubbed, @["list".stubbed, "agent".lString, 0.lNumeric].lList].lList)
   let helloRes = await socket.recvMessage(env)
   logger.info("Server said {helloRes.toString} to our hello".fmt)
 
