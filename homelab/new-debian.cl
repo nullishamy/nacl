@@ -1,16 +1,11 @@
-(defun install-package (pkg)
-  (exec "apt" '("install" pkg)))
+(set 'installer installer/apt)
+(set 'updater updater/apt)
 
-(defun update-package-set ()
-  (exec "apt" '("update")))
-
-(set 'do-docker nil)
-(defun docker-init ()
-  (exec "echo" '("docker installation not implemented yet")))
+(set 'install-docker 1)
 
 (plan "initialise new server"
-  ((update-package-set)
-   (install-package "git")
-   (install-package "net-tools")
-   (if do-docker
-     (docker-init))))
+  ((packages/update)
+   (packages/install "git")
+   (packages/install "net-tools")
+   (if install-docker
+     (packages/docker))))

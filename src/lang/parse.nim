@@ -336,9 +336,9 @@ proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.asy
         # (defun name (args) (body))
         let name = vals[1].asSymbol
         let args = vals[2].asList.map(x => x.asSymbol)
-        let body = vals[3]
+        let body = vals[3..^1]
 
-        env.set(name, defunWrapper(env, name, args, body))
+        env.set(name, defunWrapper(env, name, args, Expr(kind: exSourceFile, lists: body)))
       of "if":
         # (if (cond) (when-true) (when-false)?)
         let cond = vals[1]
@@ -362,11 +362,13 @@ proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.asy
         if sym == nil:
           return L_nil
 
+
         let val = await interpretTree(env, vals[2], ctx)
         env.set(sym.symbol, val)
       else:
         let fn = env.get(funcSymbol.symbol).asFunc
         if fn == nil:
+          print env
           raise newReferenceError("unknown function {funcSymbol.symbol}".fmt)
 
         var callArgs = newSeq[Value]()
@@ -374,4 +376,4 @@ proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.asy
           callArgs.add(await interpretTree(env, val, ctx))
         return await fn.fn(callArgs, ctx)
     else:
-      raise newTypeError(fmt"invalid value for function call {funcSymbol.kind} {funcSymbol.dbg}")
+      raise newTypeError("invalid value for function call {funcSymbol.kind} {funcSymbol.dbg}".fmt)

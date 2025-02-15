@@ -202,7 +202,7 @@ proc cmdWaitFor(): Value =
 
     if args[0].isNil:
       return L_nil
-      
+
     let taskId = parseInt(args[0].asString.str)
     var task = server.tasks.filter(x => (x.id == taskId))[0]
     
@@ -224,7 +224,13 @@ proc initEnv() =
     "waitfor": cmdWaitFor()
   }.toTable
 
-  server.env = Environment(parent: stdenv(), values: values)
+  # Patches an issue where shaker defined variables couldn't be read by the global scope
+  # So, invert the scopes. This makes the server env the stdenv, and the stdenv a parent of that.
+  # This means every `set` call by shakers (ie set server.env) is actually impacting the stdenv()
+  # Which the std.cl funcs are defined in
+  # FIXME: We should devise something better for this (some kind of module level env with setters?)
+  server.env = stdenv()
+  server.env.parent = Environment(parent: nil, values: values)
 
 proc newServer(port: Port): Server =
   let server = newAsyncSocket()

@@ -47,7 +47,6 @@ proc mapFromPairs*(p: seq[Value]): Table[string, Value] =
 const stdClSrc = staticRead("./std.cl")
 let stdCl = stdClSrc.parseSource
 
-
 proc stub(_: seq[Value], ctx: Any): Future[Value] {.async.} =
   L_nil
 
