@@ -120,9 +120,9 @@ proc cmdHello(): Value =
     clientHandle.ty = clientType
     logger.info("Client {clientId} self identifies as {clientType}".fmt)
 
-    @["list".stubbed,
-      @["list".stubbed, "state".lString, "ok".lString].lList,
-      @["list".stubbed, "msg".lString, "ack".lString].lList
+    @["list".lIdent,
+      @["list".lIdent, "state".lString, "ok".lString].lList,
+      @["list".lIdent, "msg".lString, "ack".lString].lList
     ].lList
 
   Value(kind: vkFunc, fn: FuncValue(fn: impl_cmdHello, name: "hello"))
@@ -144,7 +144,7 @@ proc cmdExec(): Value =
       raise newTypeError("expected list")
     
     let cmd = name.str
-    var builtArgs = @["list".stubbed]
+    var builtArgs = @["list".lIdent]
 
     for a in cmdArgs.values:
         builtArgs.add(a)
@@ -298,7 +298,7 @@ proc statusTask() {.async.} =
         logger.debug("Skipping client {client.id} because it is type {client.ty}".fmt)
         continue
         
-      let msg = @[stubbed("status")].lList
+      let msg = @["status".lIdent].lList
       await client.sock.send(msg.toString.lenPrefixed)
 
       let res = await client.recvMessage

@@ -18,7 +18,7 @@ proc getSource(self: Test): Expr =
 
 proc testFn(): Value =
   proc impl_test(args: seq[Value], ctx: Any): Future[Value] {.async.} =
-    return @["list".stubbed, args.lList].lList
+    return @["list".lIdent, args.lList].lList
     
   Value(kind: vkFunc, fn: FuncValue(fn: impl_test, name: "test"))
   

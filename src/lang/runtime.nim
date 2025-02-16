@@ -18,6 +18,7 @@ type
     str*: string
   SymbolValue* = ref object
     symbol*: string
+    quoted*: bool
   NumericValue* = ref object
     num*: int
   FuncValue* = ref object
@@ -134,13 +135,15 @@ proc toString*(self: Value): string =
     # which removes the quote characters entirely, so do it the old fashioned way :^)
     '"' & self.str.str & '"'
   of vkSymbol:
-    # If we have a SymbolValue it will always be quoted. If it was unquoted in the source
-    # it would have been used as a variable
-    "'" & self.symbol.symbol
+    var quote = ""
+    if self.symbol.quoted:
+      quote = "'"
+      
+    fmt "{quote}{self.symbol.symbol}"
   of vkNumeric:
     intToStr(self.num.num)
   of vkFunc:
-    self.fn.name
+    "<func>"
   of vkNil:
     "nil"
 
@@ -156,8 +159,11 @@ proc get*(self: Environment, key: string): Value =
 proc set*(self: Environment, key: string, value: Value) =
   self.values[key] = value
 
+proc lIdent*(self: string): Value =
+  Value(kind: vkSymbol, symbol: SymbolValue(symbol: self, quoted: false))
+  
 proc lSymbol*(self: string): Value =
-  Value(kind: vkSymbol, symbol: SymbolValue(symbol: self))
+  Value(kind: vkSymbol, symbol: SymbolValue(symbol: self, quoted: true))
 
 proc lString*(self: string): Value =
   Value(kind: vkString, str: StringValue(str: self))

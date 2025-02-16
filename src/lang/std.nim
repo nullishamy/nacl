@@ -47,12 +47,6 @@ proc mapFromPairs*(p: seq[Value]): Table[string, Value] =
 const stdClSrc = staticRead("./std.cl")
 let stdCl = stdClSrc.parseSource
 
-proc stub(_: seq[Value], ctx: Any): Future[Value] {.async.} =
-  L_nil
-
-proc stubbed*(name: string): Value =
-  Value(kind: vkFunc, fn: FuncValue(fn: stub, name: name))
-
 proc stdenv*(): Environment =
   let values = {
     "list": globalList(),

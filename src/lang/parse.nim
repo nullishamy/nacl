@@ -201,7 +201,7 @@ proc parse(toks: var seq[Token], macros: Table[string, MacroExpander]): Expr =
   if current.kind == tkListStart:
     var children = newSeq[Expr]()
     if current.quoted:
-      children.add(Expr(kind: exSymbol, symbol: "list"))
+      children.add(Expr(kind: exSymbol, symbol: "list", quoted: false))
       
     var next = toks.parse(macros)
     while next != nil:
@@ -313,7 +313,7 @@ proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.asy
     return lastRes
   of exSymbol:
     if base.quoted:
-      return Value(kind: vkSymbol, symbol: SymbolValue(symbol: base.symbol))
+      return Value(kind: vkSymbol, symbol: SymbolValue(symbol: base.symbol, quoted: true))
       
     let fromEnv = env.get(base.symbol)
     if fromEnv == nil:
@@ -331,6 +331,9 @@ proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.asy
     let funcSymbol = vals[0]
     case funcSymbol.kind:
     of exSymbol:
+      if funcSymbol.quoted:
+        raise newTypeError("cannot use quoted symbol for func ident")
+        
       case funcSymbol.symbol:
       of "defun":
         # (defun name (args) (body))

@@ -40,7 +40,7 @@ proc execCmd(): Value =
     # var result = @["ran {cmd.str} {argstr}".fmt]
     let escaped = result[0].replace('"'&"", '`'&'"')
     
-    return @["response".stubbed, tracker, escaped.lString].lList
+    return @["response".lIdent, tracker, escaped.lString].lList
     
   Value(kind: vkFunc, fn: FuncValue(fn: impl_execCmd, name: "exec"))
 
@@ -115,7 +115,7 @@ proc mainLoop {.async.} =
   }.toTable)
 
   logger.info("Saying hello to server...")
-  await socket.sendMessage(@["hello".stubbed, @["list".stubbed, "agent".lString, 0.lNumeric].lList].lList)
+  await socket.sendMessage(@["hello".lIdent, @["list".lIdent, "agent".lString, 0.lNumeric].lList].lList)
   let helloRes = await socket.recvMessage(env)
   logger.info("Server said {helloRes.toString} to our hello".fmt)
 

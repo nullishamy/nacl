@@ -37,7 +37,7 @@ var p = newParser:
       let socket = newSocket()
       socket.connect("localhost", Port(6969))
       echo "Connected to server"
-      let msg = @["status".stubbed].lList.toString.lenPrefixed
+      let msg = @["status".lIdent].lList.toString.lenPrefixed
   
       echo &"Send: {msg}"
       socket.send(msg)
