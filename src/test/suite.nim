@@ -42,6 +42,16 @@ proc defunTest() =
   testFrom("defun.cl")
     .evaluatesTo("(('exec 'apt 'install (\"git\")) ('exec 'apt 'install (\"curl\")))")
     .run
+
+proc dotTest() =
+  testFrom("dot.cl")
+    .evaluatesTo("(('host \"nixon.cluster\") ('port 6969))")
+    .run
+
+proc embedTest() =
+  testFrom("embed.cl")
+    .evaluatesTo("(104 101 108 108 111)")
+    .run
   
 let tests = @[
   aptTest,
@@ -51,7 +61,9 @@ let tests = @[
   symbolsTest,
   variablesTest,
   fnStringifyTest,
-  defunTest
+  defunTest,
+  dotTest,
+  embedTest
 ]
 
 for test in tests:

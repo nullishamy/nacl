@@ -11,14 +11,17 @@ import std/strformat
 
 var p = newParser:
   command("server"):
+    option("--config-path")
     run:
-      runServer()
+      runServer(opts.configPath)
   command("agent"):
+    option("--config-path")
     run:
-      runAgent()
+      runAgent(opts.configPath)
   command("client"):
+    option("--config-path")
     run:
-      runAgent()
+      runAgent(opts.configPath)
   command("exec"):
     arg("value")
     run:

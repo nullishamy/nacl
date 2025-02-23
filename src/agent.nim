@@ -19,7 +19,7 @@ proc execCmd(): Value =
   proc impl_execCmd(args: seq[Value], ctx: Any): Future[Value] {.async.} =
     # (exec "<tracker>" "cmd" (l "arg1" "arg2" "arg3")
     let tracker = args[0]
-    let cmd = args[1].asString
+    let cmd = args[1].asStringFromBytes
     let cmdArgs = args[2].asList
     if cmd == nil:
       raise newTypeError("invalid command name {args[0].toString}".fmt)
@@ -38,9 +38,9 @@ proc execCmd(): Value =
     let argstr = builtArgs.join(" ")
     var result = execCmdEx(&"{cmd.str} {argstr}")
     # var result = @["ran {cmd.str} {argstr}".fmt]
-    let escaped = result[0].replace('"'&"", '`'&'"')
+    let escaped = result[0]
     
-    return @["response".lIdent, tracker, escaped.lString].lList
+    return @["response".lIdent, tracker, escaped.lByteArray].lList
     
   Value(kind: vkFunc, fn: FuncValue(fn: impl_execCmd, name: "exec"))
 
@@ -60,6 +60,7 @@ proc recvMessage(socket: AsyncSocket, env: Environment): Future[Value] {.async.}
     
   let source = await socket.recv(parseInt(size))
   let expr = parseSource(source)
+  logger.debug("Instruction {expr.dbg}".fmt)
   var ctx = 0
   await interpretTree(env, expr, toAny(ctx))
 
@@ -95,8 +96,8 @@ proc readConfig(path: string): Future[Config] {.async.} =
 
   Config(host: host.str, port: port.num)
   
-proc mainLoop {.async.} =
-  let cfg = await readConfig("./agent.cl")
+proc mainLoop(configPath: string) {.async.} =
+  let cfg = await readConfig(configPath)
   logger.info("Agent starting up, config: {cfg}".fmt)
   let socket = newAsyncSocket()
 
@@ -125,6 +126,6 @@ proc mainLoop {.async.} =
     logger.debug("Execution: {res.toString}".fmt)
     await socket.sendMessage(res)
   
-proc runAgent* =
-  waitFor mainLoop()
+proc runAgent*(configPath: string) =
+  waitFor mainLoop(configPath)
 

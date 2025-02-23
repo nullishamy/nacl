@@ -85,6 +85,32 @@ proc asList*(self: Value): ListValue =
   else:
     nil
 
+proc asNumeric*(self: Value): NumericValue =
+  if self == nil:
+    return nil
+    
+  case self.kind:
+  of vkNumeric:
+    self.num
+  else:
+    nil
+    
+proc toString(str: seq[char]): string =
+  result = newStringOfCap(len(str))
+  for ch in str:
+    add(result, ch)
+  
+proc asStringFromBytes*(self: Value): StringValue =
+  if self == nil:
+    return nil
+    
+  case self.kind:
+  of vkList:
+    let bytes: seq[char] = self.list.values.map(x => char(x.asNumeric.num))
+    StringValue(str: bytes.toString)
+  else:
+    nil
+    
 proc asString*(self: Value): StringValue =
   if self == nil:
     return nil
@@ -102,16 +128,6 @@ proc asSymbol*(self: Value): SymbolValue =
   case self.kind:
   of vkSymbol:
     self.symbol
-  else:
-    nil
-
-proc asNumeric*(self: Value): NumericValue =
-  if self == nil:
-    return nil
-    
-  case self.kind:
-  of vkNumeric:
-    self.num
   else:
     nil
 
@@ -170,6 +186,16 @@ proc lString*(self: string): Value =
 
 proc lNumeric*(self: int): Value =
   Value(kind: vkNumeric, num: NumericValue(num: self))
+
+proc lByteArray*(self: string): Value =
+  var bytes = @[
+    "list".lIdent
+  ]
+
+  for ch in self.items.toSeq:
+    bytes.add(ord(ch).lNumeric)
+  
+  Value(kind: vkList, list: ListValue(values: bytes))
 
 proc lList*(self: seq[Value]): Value =
   Value(kind: vkList, list: ListValue(values: self))

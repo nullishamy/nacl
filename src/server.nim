@@ -29,8 +29,13 @@ type
     
     jobId: int
     requests: seq[string]
+
+  Config = ref object
+    port: int
     
   Server = ref object
+    config: Config
+    
     sock: AsyncSocket
     env: Environment
     acceptFut: Future[ClientHandle]
@@ -49,6 +54,29 @@ type
     sock: AsyncSocket
     clientAddr: string
     fut: Future[void]
+
+proc `$`(self: Config): string =
+  "(port: {self.port})".fmt
+  
+proc readConfig(path: string): Future[Config] {.async.} =
+  let content = readFile(path)
+  let env = stdenv()
+  var ctx = 0
+  let expr = parseSource(content)
+  let lsp = await interpretTree(env, expr, toAny(ctx))
+
+  let pairs = lsp.asList
+  if pairs == nil:
+    raise newTypeError("expected list got {lsp.toString}".fmt)
+
+  let map = pairs.values.mapFromPairs
+  
+  let port = map["port"].asNumeric
+
+  if port == nil:
+    raise newTypeError("expected numeric for port".fmt)
+
+  Config(port: port.num)
 
 # Stored as a global so all futures can share it
 # Needed so we can mutate e.g acceptFut from the other future
@@ -164,9 +192,9 @@ proc cmdExec(): Value =
         task.requests.add("running")
             
         let msg = @[
-          "exec".lSymbol,
+          "exec".lIdent,
           tracker.lString,
-          cmd.lString,
+          cmd.lByteArray,
           builtArgs.lList
         ].lList.toString.lenPrefixed
         
@@ -181,7 +209,7 @@ proc cmdExec(): Value =
 proc cmdResponse(): Value =
   proc impl_cmdReponse(args: seq[Value], ctx: Any): Future[Value] {.async.} =
     let tracker = args[0].asString.str.parseTracker
-    let output = args[1].asString.str
+    let output = args[1].asStringFromBytes.str
 
     var task = server.tasks.filter(x => (x.id == tracker.taskId))[0]
 
@@ -232,10 +260,10 @@ proc initEnv() =
   server.env = stdenv()
   server.env.parent = Environment(parent: nil, values: values)
 
-proc newServer(port: Port): Server =
+proc newServer(config: Config): Server =
   let server = newAsyncSocket()
   server.setSockOpt(OptReuseAddr, true)
-  server.bindAddr(port)
+  server.bindAddr(Port(config.port))
   server.listen()
   
   Server(sock: server, env: Environment(), running: true, clientId: 0)
@@ -308,8 +336,10 @@ proc statusTask() {.async.} =
     await sleepAsync(10000)
 
 
-proc runServer* =
-  server = newServer(Port(6969))
+proc runServer*(configPath: string) =
+  let config = waitFor readConfig(configPath)
+  
+  server = newServer(config)
   initEnv()
   logger.info("Server up on 0.0.0.0:6969")
   asyncCheck statusTask()

@@ -7,6 +7,7 @@ import std/tables
 import ../print
 import ./runtime
 import std/sugar
+import std/re
 
 type
   ExprType* = enum
@@ -75,7 +76,9 @@ proc dbg*(self: Expr): string  =
   of exSourceFile:
     self.lists.map(proc(x: Expr): string = $x.dbg).join("\n")
 
-func lex(source: string): seq[Token] =
+let symbolRegex = re"[a-zA-Z0-9\.+\-\/*\-]"
+
+proc lex(source: string): seq[Token] =
   var toks = newSeq[Token]()
   var i = 0
   var quoted = false
@@ -103,11 +106,10 @@ func lex(source: string): seq[Token] =
       i.dec
       toks.add(Token(kind: tkNumeric, num: parseInt(numeric), quoted: quoted))
       quoted = false
-    elif ch.isAlphaNumeric:
+    elif match(ch & "", symbolRegex):
       var symbol = ""
 
-      # Symbols can be [a-zA-Z0-9/-]
-      while i < source.len and (ch.isAlphaNumeric or ch == '-' or ch == '/'):
+      while i < source.len and match(ch & "", symbolRegex):
         symbol.add(ch)
         i.inc
         ch = source[i]
@@ -124,13 +126,6 @@ func lex(source: string): seq[Token] =
       ch = source[i]
       
       while i < source.len and ch != '"':
-        if ch == '`':
-          i.inc
-          i.inc
-          ch = source[i]
-          lit.add('"'&"")
-          continue
-          
         lit.add(ch)
         i.inc
         ch = source[i]
@@ -152,6 +147,36 @@ func pop(toks: var seq[Token]): Token =
   return val
 
 type MacroExpander = proc (expr: Expr): Expr
+
+# (embed "./file")
+# (list 42 89 8 7 1 ...)
+proc macroEmbed(): MacroExpander =
+  proc embed_impl(expr: Expr): Expr =
+    case expr.kind:
+    of exList:
+      let args = expr.lValues
+      let pathRaw = args[1]
+      var path = ""
+      
+      case pathRaw.kind:
+      of exStr:
+        path = pathRaw.sValue
+      else:
+        raise newTypeError("path was not string")
+
+      let fileBytes = readFile(path).items.toSeq
+      
+      var byteList = @[
+        Expr(kind: exSymbol, symbol: "list", quoted: false)
+      ]
+
+      for ch in fileBytes:
+        byteList.add(Expr(kind: exNumeric, num: ord(ch)))
+
+      Expr(kind: exList, lValues: byteList)
+    else:
+      raise newTypeError("didn't get list")
+  embed_impl
                        
 # (plan "name" (
 #  (exec "apt" '("update"))
@@ -238,7 +263,8 @@ proc parse(toks: var seq[Token], macros: Table[string, MacroExpander]): Expr =
 
 proc parseSource*(source: string): Expr =
   let macros = {
-    "plan": macroPlan()
+    "plan": macroPlan(),
+    "embed": macroEmbed()
   }.toTable
     
   var toks = source.lex

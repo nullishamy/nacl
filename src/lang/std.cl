@@ -1,3 +1,6 @@
+(defun . (k v)
+  '(k v))
+
 (defun installer/apt (pkg)
   (exec "apt" '("install" pkg "-y")))
 
