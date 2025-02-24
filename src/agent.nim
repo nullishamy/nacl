@@ -8,12 +8,15 @@ import std/asyncnet
 import argparse
 import std/tables
 import std/typeinfo
+import std/random
 import ./util
 import ./print
 import ./lang/std
 import ./lang/parse
 import ./lang/runtime
 import ./log
+
+randomize()
 
 proc execCmd(): Value =
   proc impl_execCmd(args: seq[Value], ctx: Any): Future[Value] {.async.} =
@@ -29,11 +32,11 @@ proc execCmd(): Value =
     var builtArgs = newSeq[string]()
 
     for arg in cmdArgs.values:
-      let argStr = arg.asString
+      let argStr = arg.asStringFromBytes
       if argStr == nil:
         raise newTypeError("invalid command arg {arg.toString}".fmt)
         
-      builtArgs.add(arg.str.str)
+      builtArgs.add(argStr.str)
 
     let argstr = builtArgs.join(" ")
     var result = execCmdEx(&"{cmd.str} {argstr}")
@@ -116,9 +119,9 @@ proc mainLoop(configPath: string) {.async.} =
   }.toTable)
 
   logger.info("Saying hello to server...")
-  await socket.sendMessage(@["hello".lIdent, @["list".lIdent, "agent".lString, 0.lNumeric].lList].lList)
-  let helloRes = await socket.recvMessage(env)
-  logger.info("Server said {helloRes.toString} to our hello".fmt)
+  await socket.sendMessage(@["hello".lIdent, @["list".lIdent, ("agent-" & intToStr(rand(100))).lString, 0.lNumeric].lList].lList)
+  let helloRes = await socket.recv(parseInt(await socket.recv(4)))
+  logger.info("Server said {helloRes} to our hello".fmt)
 
   logger.info("Waiting for instructions")
   while true:

@@ -1,6 +1,6 @@
 (defun install-package (package)
   ; Emulate a call to exec, which doesn't exist in tests.
-  '('exec 'apt 'install '(package)))
+  (list 'exec 'apt 'install (list package)))
 
 (defun install-packages (xs)
   (map xs install-package))

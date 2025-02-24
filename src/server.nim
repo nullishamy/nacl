@@ -26,6 +26,7 @@ type
 
     jobsFinished: int
     jobsRunning: int
+    completionSent: bool
     
     jobId: int
     requests: seq[string]
@@ -50,11 +51,15 @@ type
     
   ClientHandle = ref object
     id: int
+    name: string
     ty: ClientType
     sock: AsyncSocket
     clientAddr: string
     fut: Future[void]
-
+    targetList: seq[int]
+    trackingTasks: seq[Task]
+    clientIdForLogs: int
+    
 proc `$`(self: Config): string =
   "(port: {self.port})".fmt
   
@@ -94,6 +99,20 @@ proc parseTracker(input: string): Tracker =
   let jobId = parseInt(parts[1])
   
   Tracker(taskId: taskId, jobId: jobId)
+
+proc sendLog(client: ClientHandle, log: string) {.async.} =
+  if client.clientIdForLogs == 0:
+    logger.debug("No log client for {client.id}".fmt)
+    return
+
+  let loggerClients = server.clients.filter(x => x.id == client.clientIdForLogs)
+  if loggerClients.len == 0:
+    logger.warn("Could not locate log client for {client.id} even though it should exist (set as {client.clientIdForLogs})".fmt)
+    return
+
+  let loggerClient = loggerClients[0]
+  await loggerClient.sock.send(log.lenPrefixed)
+  logger.debug("Sent log '{log}' to {client.clientIdForLogs}".fmt)
   
 proc recvMessage(client: ClientHandle): Future[string] {.async.} =
   let sizeRaw = await client.sock.recv(4)
@@ -131,7 +150,7 @@ proc cmdHello(): Value =
 
     let meta = args[0].asList
     if meta == nil:
-      raise newTypeError("Expected list got {args[0].toString}")
+      raise newTypeError("Expected list got {args[0].toString}".fmt)
       
     let nameObj = meta.values[0].asString
     let tyObj = meta.values[1].asNumeric
@@ -146,12 +165,10 @@ proc cmdHello(): Value =
                      of ord(ctCli): ctCli
                      else: ctUnknown
     clientHandle.ty = clientType
+    clientHandle.name = name
     logger.info("Client {clientId} self identifies as {clientType}".fmt)
 
-    @["list".lIdent,
-      @["list".lIdent, "state".lString, "ok".lString].lList,
-      @["list".lIdent, "msg".lString, "ack".lString].lList
-    ].lList
+    clientHandle.id.lNumeric
 
   Value(kind: vkFunc, fn: FuncValue(fn: impl_cmdHello, name: "hello"))
   
@@ -163,6 +180,14 @@ proc cmdStatus(): Value =
 
 proc cmdExec(): Value =
   proc impl_cmdExec(args: seq[Value], ctx: Any): Future[Value] {.async.} =
+    let clientId = ctx.getInt
+    var clientHandles = server.clients.filter(c => c.id == clientId)
+    if clientHandles.len == 0:
+      logger.error("Client {clientId} was not found".fmt)
+      return L_nil
+
+    var clientHandle = clientHandles[0]
+    
     let name = args[0].asString
     if name == nil:
       raise newTypeError("expected string")
@@ -175,13 +200,23 @@ proc cmdExec(): Value =
     var builtArgs = @["list".lIdent]
 
     for a in cmdArgs.values:
-        builtArgs.add(a)
+      case a.kind:
+      of vkString:
+        builtArgs.add(a.str.str.lByteArray)
+      else:
+        continue
 
     let taskId = server.taskId
     server.taskId.inc
     var task = Task(id: taskId)
-    
+
+    clientHandle.trackingTasks.add(task)
+    await clientHandle.sendLog("! starting new task {task.id} !".fmt)
+
     for client in server.clients:
+      if not clientHandle.targetList.contains(client.id):
+        continue
+        
       case client.ty:
       of ctAgent:
         task.jobsRunning.inc
@@ -190,6 +225,8 @@ proc cmdExec(): Value =
         task.jobId.inc
         let tracker = "{task.id}/{jobId}".fmt
         task.requests.add("running")
+
+        await clientHandle.sendLog(" => spinning up job {jobId} on {client.name}".fmt)
             
         let msg = @[
           "exec".lIdent,
@@ -203,6 +240,7 @@ proc cmdExec(): Value =
         continue
         
     server.tasks.add(task)
+
     "{taskId}".fmt.lString
   Value(kind: vkFunc, fn: FuncValue(fn: impl_cmdExec, name: "exec"))
 
@@ -215,6 +253,20 @@ proc cmdResponse(): Value =
 
     task.requests[tracker.jobId] = output
     task.jobsFinished.inc
+
+    let clientsInterested = server.clients.filter(x => x.trackingTasks.contains(task))
+    for client in clientsInterested:
+      var log = ""
+      log = log & " > job {tracker.jobId} finished in task {tracker.taskId}\n".fmt
+      
+      for line in output.strip.splitLines:
+        log = log & (" $ " & line & "\n")
+        
+      if task.complete and not task.completionSent:
+        task.completionSent = true
+        log = log & "== task {task.id} complete! ==\n\n".fmt
+        
+      await client.sendLog(log)
     
     # Indicate that we don't want to send anything back to the client
     # This is the response handler for the request we already sent
@@ -241,6 +293,65 @@ proc cmdWaitFor(): Value =
     return task.requests.map(x => x.lString).lList
     
   Value(kind: vkFunc, fn: FuncValue(fn: impl_cmdWaitFor, name: "waitfor"))
+
+proc cmdNodes(): Value =
+  proc impl_cmdNodes(args: seq[Value], ctx: Any): Future[Value] {.async.} =
+    let nodes = server.clients.filter(x => x.ty == ctAgent)
+    let mapped = nodes.map(x => @[x.id.lNumeric, x.name.lString].lList)
+    mapped.lList
+    
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_cmdNodes, name: "server/nodes"))
+
+
+proc cmdClearTargets(): Value =
+  proc impl_clearTargets(args: seq[Value], ctx: Any): Future[Value] {.async.} =
+    let clientId = ctx.getInt
+    var clientHandles = server.clients.filter(c => c.id == clientId)
+    if clientHandles.len == 0:
+      logger.error("Client {clientId} was not found".fmt)
+      return L_nil
+
+    var clientHandle = clientHandles[0]
+    clientHandle.targetList = @[]
+    L_nil
+    
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_clearTargets, name: "targets/clear"))
+
+proc cmdAddTarget(): Value =
+  proc impl_addTarget(args: seq[Value], ctx: Any): Future[Value] {.async.} =
+    let clientId = ctx.getInt
+    var clientHandles = server.clients.filter(c => c.id == clientId)
+    if clientHandles.len == 0:
+      logger.error("Client {clientId} was not found".fmt)
+      return L_nil
+
+    var clientHandle = clientHandles[0]
+
+    let targetId = args[0].asNumeric.num
+    clientHandle.targetList.add(targetId)
+    
+    targetId.lNumeric
+    
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_addTarget, name: "targets/add"))
+
+proc cmdEnableLogging(): Value =
+  proc impl_enableLogging(args: seq[Value], ctx: Any): Future[Value] {.async.} =
+    let targetId = args[0].asNumeric.num
+    let clientId = ctx.getInt
+    
+    var clientHandles = server.clients.filter(c => c.id == targetId)
+    if clientHandles.len == 0:
+      logger.error("Client {clientId} was not found".fmt)
+      return L_nil
+
+    var clientHandle = clientHandles[0]
+    clientHandle.clientIdForLogs = clientId
+    logger.info("Client {clientId} is now tracking logs for {targetId}".fmt)
+
+    # Log only clients don't care about interpreting lisp
+    nil
+    
+  Value(kind: vkFunc, fn: FuncValue(fn: impl_enableLogging, name: "enable-logging"))
   
 proc initEnv() =
   let values = {
@@ -249,7 +360,11 @@ proc initEnv() =
     "status": cmdStatus(),
     "exec": cmdExec(),
     "response": cmdResponse(),
-    "waitfor": cmdWaitFor()
+    "waitfor": cmdWaitFor(),
+    "server/nodes": cmdNodes(),
+    "targets/clear": cmdClearTargets(),
+    "targets/add": cmdAddTarget(),
+    "enable-logging": cmdEnableLogging()
   }.toTable
 
   # Patches an issue where shaker defined variables couldn't be read by the global scope
@@ -266,7 +381,7 @@ proc newServer(config: Config): Server =
   server.bindAddr(Port(config.port))
   server.listen()
   
-  Server(sock: server, env: Environment(), running: true, clientId: 0)
+  Server(sock: server, env: Environment(), running: true, clientId: 1)
 
 proc waitForClient(): Future[ClientHandle] {.async.} = 
   let client = await server.sock.acceptAddr()
@@ -293,6 +408,7 @@ proc handleClient(client: ClientHandle) {.async.} =
       continue
       
     await client.sock.send(res.toString.lenPrefixed)
+    await client.sendLog("<close>")
 
 proc mainLoop() {.async.} =
   while server.running:

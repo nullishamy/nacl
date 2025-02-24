@@ -7,7 +7,7 @@ import std/tables
 import ../print
 import ./runtime
 import std/sugar
-import std/re
+import regex
 
 type
   ExprType* = enum
@@ -25,6 +25,7 @@ type
     of exNumeric:
       num*: int
     of exList:
+      lQuoted*: bool
       lValues*: seq[Expr]
 
   TokenType = enum
@@ -76,7 +77,7 @@ proc dbg*(self: Expr): string  =
   of exSourceFile:
     self.lists.map(proc(x: Expr): string = $x.dbg).join("\n")
 
-let symbolRegex = re"[a-zA-Z0-9\.+\-\/*\-]"
+let symbolRegex = re2"[a-zA-Z0-9\.+\-\/*\-]"
 
 proc lex(source: string): seq[Token] =
   var toks = newSeq[Token]()
@@ -221,19 +222,18 @@ proc macroPlan(): MacroExpander =
              
   plan_impl
   
-proc parse(toks: var seq[Token], macros: Table[string, MacroExpander]): Expr =
+proc parse(toks: var seq[Token], macros: Table[string, MacroExpander], quoted = false): Expr =
   var current = toks.pop()
   if current.kind == tkListStart:
     var children = newSeq[Expr]()
-    if current.quoted:
-      children.add(Expr(kind: exSymbol, symbol: "list", quoted: false))
-      
+    let quoted = current.quoted
     var next = toks.parse(macros)
+    
     while next != nil:
       children.add(next)
       next = toks.parse(macros)
 
-    let happy = Expr(kind: exList, lValues: children)
+    let happy = Expr(kind: exList, lValues: children, lQuoted: quoted)
     if children.len == 0:
       return happy
     
@@ -343,6 +343,7 @@ proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.asy
       
     let fromEnv = env.get(base.symbol)
     if fromEnv == nil:
+      print env
       raise newReferenceError("unknown symbol {base.symbol}".fmt)
     return fromEnv
   of exStr:
@@ -353,6 +354,25 @@ proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.asy
     let vals = base.lValues
     if vals.len == 0:
       return Value(kind: vkList, list: ListValue())
+
+    if base.lQuoted:
+      proc quoteExpr(expr: Expr): Value =
+        case expr.kind:
+        of exSourceFile:
+          raise newTypeError("cannot quote source file")
+        of exSymbol:
+          return Value(kind: vkSymbol, symbol: SymbolValue(symbol: expr.symbol))
+        of exStr:
+          return Value(kind: vkString, str: StringValue(str: expr.sValue))
+        of exNumeric:
+          return Value(kind: vkNumeric, num: NumericValue(num: expr.num))
+        of exList:
+          var quotedValues = newSeq[Value]()
+          for inner in expr.lValues:
+            quotedValues.add(quoteExpr(inner))
+          return Value(kind: vkList, list:  ListValue(values: quotedValues, quoted: true))
+        
+      return quoteExpr(base)
 
     let funcSymbol = vals[0]
     case funcSymbol.kind:
@@ -387,13 +407,9 @@ proc interpretTree*(env: Environment, base: Expr, ctx: Any): Future[Value] {.asy
             return L_nil
       of "set":
         # (set name value)
-        let sym = interpretTree(env, vals[1], ctx).await.asSymbol
-        if sym == nil:
-          return L_nil
-
-
+        let sym = vals[1].asSymbol
         let val = await interpretTree(env, vals[2], ctx)
-        env.set(sym.symbol, val)
+        env.set(sym, val)
       else:
         let fn = env.get(funcSymbol.symbol).asFunc
         if fn == nil:

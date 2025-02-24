@@ -10,7 +10,7 @@ proc aptTest() =
 
 proc conditionsTest() =
   testFrom("conditions.cl")
-    .evaluatesTo("('t)")
+    .evaluatesTo("'(t)")
     .run
 
 proc constructListTest() =
@@ -20,7 +20,7 @@ proc constructListTest() =
 
 proc quoteListTest() =
   testFrom("quote-list.cl")
-    .evaluatesTo("('test 1 ('inner) nil)")
+    .evaluatesTo("'(test 1 '(inner) '(ack))")
     .run
 
 proc symbolsTest() =
@@ -52,6 +52,11 @@ proc embedTest() =
   testFrom("embed.cl")
     .evaluatesTo("(104 101 108 108 111)")
     .run
+
+proc secondQuoteTest() =
+  testFrom("2nd-level-quote.cl")
+    .evaluatesTo("'(quoted)")
+    .run
   
 let tests = @[
   aptTest,
@@ -63,7 +68,8 @@ let tests = @[
   fnStringifyTest,
   defunTest,
   dotTest,
-  embedTest
+  embedTest,
+  secondQuoteTest
 ]
 
 for test in tests:

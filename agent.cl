@@ -1,3 +1,3 @@
-'(
-  (. 'host "nixon.cluster")
-  (. 'port 6969))
+(list
+ (. 'host "nixon.cluster")
+ (. 'port 6969))

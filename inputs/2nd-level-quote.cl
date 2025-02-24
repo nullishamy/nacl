@@ -1,0 +1,4 @@
+(defun test ()
+  '(quoted))
+
+(test)

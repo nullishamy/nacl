@@ -13,6 +13,7 @@ type
   LispFunc* = proc (args: seq[Value], ctx: Any): Future[Value]
 
   ListValue* = ref object
+    quoted*: bool
     values*: seq[Value]
   StringValue* = ref object
     str*: string
@@ -145,7 +146,10 @@ proc toString*(self: Value): string =
   case self.kind:
   of vkList:
     let items = self.list.values.map(i => i.toString).join " "
-    fmt"({items})"
+    var quote = ""
+    if self.list.quoted:
+      quote = "'"
+    fmt"{quote}({items})"
   of vkString:
     # Using the double quote method causes nim to treat it as a multiline string
     # which removes the quote characters entirely, so do it the old fashioned way :^)
